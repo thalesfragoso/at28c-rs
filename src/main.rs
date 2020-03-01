@@ -93,7 +93,12 @@ const APP: () = {
         // NOTE(unsafe) this is the GPIOA peripheral and we can safely use ODR register, since the
         // other pins used aren't configured as outputs
         let other_gpioa = unsafe { &(*pac::GPIOA::ptr()) };
-        let blue_io = BlueIO::new(other_gpioa, cx.device.GPIOB, &mut afio.mapr);
+        let blue_io = BlueIO::new(
+            other_gpioa,
+            cx.device.GPIOB,
+            &mut afio.mapr,
+            clocks.sysclk(),
+        );
 
         init::LateResources {
             usb_dev,

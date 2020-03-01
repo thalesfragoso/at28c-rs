@@ -1,10 +1,12 @@
-use core::ops::Deref;
+use core::{convert::TryFrom, ops::Deref};
 
 use super::{At28cIO, AtError};
+use cortex_m::asm::delay;
 use stm32f1xx_hal::{
     afio::MAPR,
     bb,
     pac::{self, AFIO, GPIOB, RCC},
+    time::Hertz,
 };
 
 #[derive(Copy, Clone, PartialEq)]
@@ -16,15 +18,18 @@ pub enum IOState {
 /// B8 to B15 -> IO lines
 /// A0 to A10 -> Lower address byte
 /// B3 to B6 -> Higher address byte
+/// B0 -> Output Enable
+/// B1 -> Write Enable
 pub struct BlueIO<T> {
     porta: T,
     portb: GPIOB,
     state: IOState,
+    cycles_us: u32,
 }
 
 impl<T: Deref<Target = pac::gpioa::RegisterBlock>> BlueIO<T> {
     #[inline(always)]
-    pub fn new(porta: T, portb: GPIOB, _mapr: &mut MAPR) -> Self {
+    pub fn new(porta: T, portb: GPIOB, _mapr: &mut MAPR, sysclk: impl Into<Hertz>) -> Self {
         // Enable and reset the GPIOB peripheral
         // NOTE(unsafe) atomic writes with no side-effects
         unsafe {
@@ -92,8 +97,14 @@ impl<T: Deref<Target = pac::gpioa::RegisterBlock>> BlueIO<T> {
         unsafe {
             (*AFIO::ptr()).mapr.modify(|_, w| w.swj_cfg().bits(0b010));
         }
+        // Output enable and write enable are active low, so set then high before configuring them
+        portb.bsrr.write(|w| w.bs0().set_bit().bs1().set_bit());
         portb.crl.modify(|_, w| {
-            w.mode3()
+            w.mode0()
+                .output50()
+                .mode1()
+                .output50()
+                .mode3()
                 .output50()
                 .mode4()
                 .output50()
@@ -114,6 +125,7 @@ impl<T: Deref<Target = pac::gpioa::RegisterBlock>> BlueIO<T> {
             porta,
             portb,
             state: IOState::Reading,
+            cycles_us: sysclk.into().0 / 1_000_000,
         }
     }
 
@@ -174,10 +186,7 @@ impl<T: Deref<Target = pac::gpioa::RegisterBlock>> BlueIO<T> {
         });
     }
 
-    fn set_address(&mut self, addr: u16) -> Result<(), AtError> {
-        if addr > 0x7FFF {
-            return Err(AtError::InvalidAddress);
-        }
+    fn set_address(&mut self, addr: u16) {
         let addr_low = u32::from(addr & 0x07FF);
         let addr_high = u32::from((addr >> 11) & 0x000F);
         self.porta.odr.modify(|r, w| {
@@ -190,6 +199,116 @@ impl<T: Deref<Target = pac::gpioa::RegisterBlock>> BlueIO<T> {
             // NOTE(unsafe) Not changing the reserved bits
             unsafe { w.bits(to_write) }
         });
-        Ok(())
+    }
+
+    /// This input in the eeprom chip is active low
+    fn set_output_enable(&mut self, active: bool) {
+        self.portb.bsrr.write(|w| {
+            if active {
+                w.br0().set_bit()
+            } else {
+                w.bs0().set_bit()
+            }
+        });
+    }
+
+    /// This input in the eeprom chip is active low
+    fn set_write_enable(&mut self, active: bool) {
+        self.portb.bsrr.write(|w| {
+            if active {
+                w.br1().set_bit()
+            } else {
+                w.bs1().set_bit()
+            }
+        });
+    }
+}
+
+impl<T: Deref<Target = pac::gpioa::RegisterBlock>> At28cIO for BlueIO<T> {
+    const MAX_ADDR: u16 = 0x7FFF;
+    const WRITE_TIMEOUT_MS: u8 = 10;
+
+    fn read_byte(&mut self, addr: u16) -> u8 {
+        self.set_address(addr);
+        self.set_output_enable(true);
+        // delay for 1us
+        delay(self.cycles_us);
+        let byte = self.read();
+        self.set_output_enable(false);
+        // delay for 0.5us, this works because cycles_us is always >= 8 for stm32f103
+        delay(self.cycles_us / 2);
+        byte
+    }
+
+    fn write_byte(&mut self, byte: u8, addr: u16) -> Result<(), AtError> {
+        if addr > Self::MAX_ADDR {
+            return Err(AtError::InvalidAddress);
+        }
+        self.set_address(addr);
+        self.write(byte);
+        self.set_write_enable(true);
+        // delay for 0.5us, this works because cycles_us is always >= 8 for stm32f103
+        delay(self.cycles_us / 2);
+        self.set_write_enable(false);
+        let mut attempts = 0;
+        let timeout = loop {
+            if self.read_byte(addr) == byte {
+                break false;
+            } else {
+                attempts += 1;
+                if attempts == Self::WRITE_TIMEOUT_MS {
+                    break true;
+                }
+                // delay for 1ms
+                delay(self.cycles_us * 1000);
+            }
+        };
+        if timeout {
+            Err(AtError::WriteTimeout)
+        } else {
+            Ok(())
+        }
+    }
+
+    fn write_page(&mut self, buf: &[u8], start_addr: u16) -> Result<(), AtError> {
+        if buf.is_empty() {
+            return Ok(());
+        }
+        if start_addr > Self::MAX_ADDR {
+            return Err(AtError::InvalidAddress);
+        }
+        let len = u16::try_from(buf.len()).map_err(|_| AtError::PageOverflow)?;
+        // Check if the buf fits in one single page
+        if start_addr + len > start_addr | 0x003F {
+            return Err(AtError::PageOverflow);
+        }
+        let mut addr = start_addr;
+        for byte in buf.iter() {
+            self.set_address(addr);
+            self.write(*byte);
+            self.set_write_enable(true);
+            // delay for 0.5us, this works because cycles_us is always >= 8 for stm32f103
+            delay(self.cycles_us / 2);
+            self.set_write_enable(false);
+            addr += 1;
+        }
+        let mut attempts = 0;
+        let timeout = loop {
+            if self.read_byte(addr) == buf[(len as usize) - 1] {
+                break false;
+            } else {
+                attempts += 1;
+                if attempts == Self::WRITE_TIMEOUT_MS {
+                    break true;
+                }
+                // delay for 1ms
+                delay(self.cycles_us * 1000);
+            }
+        };
+        if timeout {
+            Err(AtError::WriteTimeout)
+        } else {
+            Ok(())
+        }
     }
 }
