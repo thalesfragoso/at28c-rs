@@ -2,8 +2,10 @@
 #![no_std]
 
 //use panic_semihosting as _;
-use core::panic::PanicInfo;
-use core::sync::atomic::{self, Ordering};
+use core::{
+    panic::PanicInfo,
+    sync::atomic::{self, Ordering},
+};
 
 use cortex_m::asm;
 //use cortex_m_semihosting::hprintln;
@@ -16,10 +18,25 @@ use stm32f1xx_hal::{
 };
 use usb_device::bus;
 use usb_device::prelude::*;
-use usbd_serial::{SerialPort, USB_CLASS_CDC};
+use usbd_serial::{
+    heapless::{pool, Box, Pool},
+    typenum::consts::U64,
+    PoolNode, PoolPort, USB_CLASS_CDC,
+};
 
 mod at28c;
-use at28c::BlueIO;
+use at28c::{At28cIO, BlueIO};
+
+mod cmds;
+use cmds::{Commands, Response, State};
+
+const NR_NODES: usize = 6;
+const POOL_MEM: usize = core::mem::size_of::<PoolNode>() * NR_NODES;
+
+pool!(
+    #[allow(non_upper_case_globals)]
+    SerialPool: PoolNode
+);
 
 type Led =
     stm32f1xx_hal::gpio::gpioc::PC13<stm32f1xx_hal::gpio::Output<stm32f1xx_hal::gpio::PushPull>>;
@@ -28,15 +45,16 @@ type Led =
 const APP: () = {
     struct Resources {
         usb_dev: UsbDevice<'static, UsbBusType>,
-        serial: SerialPort<'static, UsbBusType>,
+        serial: PoolPort<'static, UsbBusType, SerialPool, SerialPool, U64, U64>,
         led: Led,
-        clock: u32,
-        blue_io: BlueIO<&'static pac::gpioa::RegisterBlock>,
+        blue_io: BlueIO,
+        machine_state: State,
     }
 
     #[init]
     fn init(cx: init::Context) -> init::LateResources {
         static mut USB_BUS: Option<bus::UsbBusAllocator<UsbBusType>> = None;
+        static mut MEMORY: [u8; POOL_MEM] = [0; POOL_MEM];
 
         let mut flash = cx.device.FLASH.constrain();
         let mut rcc = cx.device.RCC.constrain();
@@ -76,12 +94,10 @@ const APP: () = {
 
         *USB_BUS = Some(UsbBus::new(usb));
 
-        //let serial = SerialPort::new_with_store(
-        //    USB_BUS.as_ref().unwrap(),
-        //    &mut SERIAL_RS[..],
-        //    &mut SERIAL_WS[..],
-        //);
-        let serial = SerialPort::new(USB_BUS.as_ref().unwrap());
+        SerialPool::grow(MEMORY);
+        let wb = SerialPool::alloc().unwrap().init(PoolNode::new());
+        let rb = SerialPool::alloc().unwrap().init(PoolNode::new());
+        let serial = PoolPort::new(USB_BUS.as_ref().unwrap(), Some(wb), Some(rb)).unwrap();
 
         let usb_dev = UsbDeviceBuilder::new(USB_BUS.as_ref().unwrap(), UsbVidPid(0x16c0, 0x27dd))
             .manufacturer("Fake company")
@@ -90,45 +106,74 @@ const APP: () = {
             .device_class(USB_CLASS_CDC)
             .build();
 
-        // NOTE(unsafe) this is the GPIOA peripheral and we can safely use ODR register, since the
-        // other pins used aren't configured as outputs
-        let other_gpioa = unsafe { &(*pac::GPIOA::ptr()) };
-        let blue_io = BlueIO::new(
-            other_gpioa,
-            cx.device.GPIOB,
-            &mut afio.mapr,
-            clocks.sysclk(),
-        );
+        let blue_io = BlueIO::new(cx.device.GPIOB, &mut afio.mapr, clocks.sysclk());
 
         init::LateResources {
             usb_dev,
             serial,
             led,
-            clock: clocks.sysclk().0,
             blue_io,
+            machine_state: State::default(),
         }
     }
 
-    #[idle(resources = [serial, led, clock])]
+    #[idle]
     fn idle(_cx: idle::Context) -> ! {
         loop {
             asm::wfi();
         }
     }
 
-    //#[task(binds = USB_HP_CAN_TX, resources = [usb_dev, serial])]
-    //fn usb_tx(mut cx: usb_tx::Context) {
-    //    usb_poll(&mut cx.resources.usb_dev, &mut cx.resources.serial);
-    //}
-
-    #[task(binds = USB_LP_CAN_RX0, resources = [usb_dev, serial])]
+    #[task(binds = USB_LP_CAN_RX0, priority = 3, resources = [usb_dev, serial, machine_state], spawn = [process])]
     fn usb_rx0(cx: usb_rx0::Context) {
         if !cx.resources.usb_dev.poll(&mut [cx.resources.serial]) {
             return;
         }
+        match cx.resources.serial.process() {
+            Ok(c) if c == 3 => {
+                let buf = cx.resources.serial.reader_buf().unwrap();
+                if *cx.resources.machine_state != State::WaitingPage {
+                    let cmd = buf[0].into();
+                    if *cx.resources.machine_state == State::Idle {
+                        cx.spawn
+                            .process(cmd, u16::from_le_bytes([buf[1], buf[2]]), None)
+                            .ok();
+                    }
+                    let response = Commands::process(cmd, cx.resources.machine_state);
+                    cx.resources.serial.clear_reader();
+                    if cx.resources.serial.writer_len() == 64 {
+                        cx.resources.serial.clear_writer();
+                    }
+                    if response != Response::NoResponse {
+                        cx.resources.serial.write(&[response.into()]).ok();
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
 
-        let mut buf = [0u8; 8];
-        cx.resources.serial.read(&mut buf).ok();
+    #[task(priority = 2, capacity = 2, resources = [serial, blue_io, machine_state, led])]
+    fn process(
+        mut cx: process::Context,
+        cmd: Commands,
+        addr: u16,
+        _buffer: Option<Box<SerialPool>>,
+    ) {
+        if cmd == Commands::ReadByte {
+            let byte = cx.resources.blue_io.read_byte(addr);
+            cx.resources
+                .serial
+                .lock(|shared| shared.write(&[byte]).ok());
+            cx.resources
+                .machine_state
+                .lock(|shared| *shared = State::Idle);
+        }
+        cx.resources.led.toggle().ok();
+    }
+
+    extern "C" {
+        fn USART1();
     }
 };
 

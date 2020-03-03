@@ -1,4 +1,4 @@
-use core::{convert::TryFrom, ops::Deref};
+use core::convert::TryFrom;
 
 use super::{At28cIO, AtError};
 use cortex_m::asm::delay;
@@ -20,16 +20,15 @@ pub enum IOState {
 /// B3 to B6 -> Higher address byte
 /// B0 -> Output Enable
 /// B1 -> Write Enable
-pub struct BlueIO<T> {
-    porta: T,
+pub struct BlueIO {
     portb: GPIOB,
     state: IOState,
     cycles_us: u32,
 }
 
-impl<T: Deref<Target = pac::gpioa::RegisterBlock>> BlueIO<T> {
+impl BlueIO {
     #[inline(always)]
-    pub fn new(porta: T, portb: GPIOB, _mapr: &mut MAPR, sysclk: impl Into<Hertz>) -> Self {
+    pub fn new(portb: GPIOB, _mapr: &mut MAPR, sysclk: impl Into<Hertz>) -> Self {
         // Enable and reset the GPIOB peripheral
         // NOTE(unsafe) atomic writes with no side-effects
         unsafe {
@@ -43,6 +42,8 @@ impl<T: Deref<Target = pac::gpioa::RegisterBlock>> BlueIO<T> {
             bb::set(&(&(*RCC::ptr()).apb2rstr), 3);
             bb::clear(&(&(*RCC::ptr()).apb2rstr), 3);
         }
+        // NOTE(unsafe) Only access BlueIO exclusive registers
+        let porta = unsafe { &(*pac::GPIOA::ptr()) };
         porta.crl.write(|w| {
             w.mode0()
                 .output50()
@@ -122,7 +123,6 @@ impl<T: Deref<Target = pac::gpioa::RegisterBlock>> BlueIO<T> {
                 .push_pull()
         });
         Self {
-            porta,
             portb,
             state: IOState::Reading,
             cycles_us: sysclk.into().0 / 1_000_000,
@@ -189,7 +189,10 @@ impl<T: Deref<Target = pac::gpioa::RegisterBlock>> BlueIO<T> {
     fn set_address(&mut self, addr: u16) {
         let addr_low = u32::from(addr & 0x07FF);
         let addr_high = u32::from((addr >> 11) & 0x000F);
-        self.porta.odr.modify(|r, w| {
+
+        // NOTE(unsafe) Only access BlueIO exclusive registers
+        let porta = unsafe { &(*pac::GPIOA::ptr()) };
+        porta.odr.modify(|r, w| {
             let current = r.bits();
             // NOTE(unsafe) Not changing the reserved bits
             unsafe { w.bits(current | addr_low) }
@@ -224,7 +227,7 @@ impl<T: Deref<Target = pac::gpioa::RegisterBlock>> BlueIO<T> {
     }
 }
 
-impl<T: Deref<Target = pac::gpioa::RegisterBlock>> At28cIO for BlueIO<T> {
+impl At28cIO for BlueIO {
     const MAX_ADDR: u16 = 0x7FFF;
     const WRITE_TIMEOUT_MS: u8 = 10;
 
