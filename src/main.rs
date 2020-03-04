@@ -1,11 +1,11 @@
 #![no_main]
 #![no_std]
 
-//use panic_semihosting as _;
 use core::{
     panic::PanicInfo,
     sync::atomic::{self, Ordering},
 };
+//use panic_semihosting as _;
 
 use cortex_m::asm;
 //use cortex_m_semihosting::hprintln;
@@ -65,8 +65,7 @@ const APP: () = {
             .use_hse(8.mhz())
             .sysclk(72.mhz())
             .pclk1(36.mhz())
-            .pclk2(8.mhz())
-            .adcclk(1.mhz())
+            .pclk2(72.mhz())
             .freeze(&mut flash.acr);
 
         assert!(clocks.usbclk_valid());
@@ -130,14 +129,29 @@ const APP: () = {
             return;
         }
         match cx.resources.serial.process() {
-            Ok(c) if c == 3 => {
+            Ok(c) if c == 4 => {
                 let buf = cx.resources.serial.reader_buf().unwrap();
                 if *cx.resources.machine_state != State::WaitingPage {
                     let cmd = buf[0].into();
                     if *cx.resources.machine_state == State::Idle {
-                        cx.spawn
-                            .process(cmd, u16::from_le_bytes([buf[1], buf[2]]), None)
-                            .ok();
+                        match cmd {
+                            Commands::ReadByte | Commands::DisableProctetion => {
+                                cx.spawn
+                                    .process(cmd, u16::from_le_bytes([buf[1], buf[2]]), None, None)
+                                    .ok();
+                            }
+                            Commands::WriteByte => {
+                                cx.spawn
+                                    .process(
+                                        cmd,
+                                        u16::from_le_bytes([buf[1], buf[2]]),
+                                        Some(buf[3]),
+                                        None,
+                                    )
+                                    .ok();
+                            }
+                            _ => {}
+                        }
                     }
                     let response = Commands::process(cmd, cx.resources.machine_state);
                     cx.resources.serial.clear_reader();
@@ -146,6 +160,7 @@ const APP: () = {
                     }
                     if response != Response::NoResponse {
                         cx.resources.serial.write(&[response.into()]).ok();
+                        cx.resources.serial.flush().ok();
                     }
                 }
             }
@@ -158,13 +173,40 @@ const APP: () = {
         mut cx: process::Context,
         cmd: Commands,
         addr: u16,
+        byte_write: Option<u8>,
         _buffer: Option<Box<SerialPool>>,
     ) {
         if cmd == Commands::ReadByte {
             let byte = cx.resources.blue_io.read_byte(addr);
+            cx.resources.serial.lock(|shared| {
+                shared.write(&[byte]).ok();
+                shared.flush().ok();
+            });
             cx.resources
-                .serial
-                .lock(|shared| shared.write(&[byte]).ok());
+                .machine_state
+                .lock(|shared| *shared = State::Idle);
+        } else if cmd == Commands::WriteByte {
+            if let Some(byte) = byte_write {
+                let result = cx.resources.blue_io.write_byte(byte, addr);
+                let response = if result.is_ok() {
+                    Response::WriteDone
+                } else {
+                    Response::Error
+                };
+                cx.resources.serial.lock(|shared| {
+                    shared.write(&[response.into()]).ok();
+                    shared.flush().ok();
+                });
+                cx.resources
+                    .machine_state
+                    .lock(|shared| *shared = State::Idle);
+            }
+        } else if cmd == Commands::DisableProctetion {
+            cx.resources.blue_io.disable_write_protection();
+            cx.resources.serial.lock(|shared| {
+                shared.write(&[Response::WriteDone.into()]).ok();
+                shared.flush().ok();
+            });
             cx.resources
                 .machine_state
                 .lock(|shared| *shared = State::Idle);

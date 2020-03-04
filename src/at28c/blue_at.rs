@@ -33,14 +33,14 @@ impl BlueIO {
         // NOTE(unsafe) atomic writes with no side-effects
         unsafe {
             // PORTA
-            bb::set(&(&(*RCC::ptr()).apb2enr), 2);
-            bb::set(&(&(*RCC::ptr()).apb2rstr), 2);
-            bb::clear(&(&(*RCC::ptr()).apb2rstr), 2);
+            bb::set(&(*RCC::ptr()).apb2enr, 2);
+            bb::set(&(*RCC::ptr()).apb2rstr, 2);
+            bb::clear(&(*RCC::ptr()).apb2rstr, 2);
 
             // PORTB
-            bb::set(&(&(*RCC::ptr()).apb2enr), 3);
-            bb::set(&(&(*RCC::ptr()).apb2rstr), 3);
-            bb::clear(&(&(*RCC::ptr()).apb2rstr), 3);
+            bb::set(&(*RCC::ptr()).apb2enr, 3);
+            bb::set(&(*RCC::ptr()).apb2rstr, 3);
+            bb::clear(&(*RCC::ptr()).apb2rstr, 3);
         }
         // NOTE(unsafe) Only access BlueIO exclusive registers
         let porta = unsafe { &(*pac::GPIOA::ptr()) };
@@ -113,6 +113,10 @@ impl BlueIO {
                 .output50()
                 .mode6()
                 .output50()
+                .cnf0()
+                .push_pull()
+                .cnf1()
+                .push_pull()
                 .cnf3()
                 .push_pull()
                 .cnf4()
@@ -182,7 +186,7 @@ impl BlueIO {
         self.portb.odr.modify(|r, w| {
             let current = r.bits();
             // NOTE(unsafe) Not changing the reserved bits
-            unsafe { w.bits(current | output) }
+            unsafe { w.bits((current & !0x0000_FF00) | output) }
         });
     }
 
@@ -195,10 +199,10 @@ impl BlueIO {
         porta.odr.modify(|r, w| {
             let current = r.bits();
             // NOTE(unsafe) Not changing the reserved bits
-            unsafe { w.bits(current | addr_low) }
+            unsafe { w.bits((current & !0x0000_07FF) | addr_low) }
         });
         self.portb.odr.modify(|r, w| {
-            let to_write = r.bits() | ((addr_high << 3) & 0x0000_0078);
+            let to_write = (r.bits() & !0x0000_0078) | ((addr_high << 3) & 0x0000_0078);
             // NOTE(unsafe) Not changing the reserved bits
             unsafe { w.bits(to_write) }
         });
@@ -250,8 +254,8 @@ impl At28cIO for BlueIO {
         self.set_address(addr);
         self.write(byte);
         self.set_write_enable(true);
-        // delay for 0.5us, this works because cycles_us is always >= 8 for stm32f103
-        delay(self.cycles_us / 2);
+        // delay for 5us
+        delay(self.cycles_us * 5);
         self.set_write_enable(false);
         let mut attempts = 0;
         let timeout = loop {
@@ -312,6 +316,19 @@ impl At28cIO for BlueIO {
             Err(AtError::WriteTimeout)
         } else {
             Ok(())
+        }
+    }
+
+    fn disable_write_protection(&mut self) {
+        let data = &[0xAA, 0x55, 0x80, 0xAA, 0x55, 0x20];
+        let addresses = &[0x5555, 0x2AAA, 0x5555, 0x5555, 0x2AAA, 0x5555];
+        for (byte, addr) in data.iter().zip(addresses.iter()) {
+            self.set_address(*addr);
+            self.write(*byte);
+            self.set_write_enable(true);
+            // delay for 5us
+            delay(self.cycles_us * 5);
+            self.set_write_enable(false);
         }
     }
 }

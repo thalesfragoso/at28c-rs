@@ -13,7 +13,8 @@ pub enum Commands {
     WritePage = 0x03,
     Disconnect = 0x04,
     QueryState = 0x05,
-    Invalid = 0x06,
+    DisableProctetion = 0x06,
+    Invalid = 0x07,
 }
 
 #[derive(Copy, Clone, PartialEq)]
@@ -29,6 +30,7 @@ pub enum Response {
     NotValid = 0x07,
     NoResponse = 0x08,
     SendPage = 0x09,
+    Error = 0x10,
 }
 
 #[derive(Copy, Clone, PartialEq)]
@@ -54,7 +56,7 @@ impl Into<u8> for Response {
 
 impl From<u8> for Commands {
     fn from(cmd: u8) -> Self {
-        if cmd <= 0x05 {
+        if cmd <= 0x06 {
             // NOTE(unsafe), Commands is repr(u8)
             unsafe { mem::transmute(cmd) }
         } else {
@@ -74,7 +76,7 @@ impl Commands {
                     Response::Connected
                 }
             }
-            Commands::ReadByte | Commands::WriteByte => {
+            Commands::ReadByte | Commands::WriteByte | Commands::DisableProctetion => {
                 if *state != State::Idle {
                     Response::NotValid
                 } else {
@@ -94,6 +96,7 @@ impl Commands {
                 if *state != State::Idle {
                     Response::NotValid
                 } else {
+                    *state = State::Disconnected;
                     Response::Disconnected
                 }
             }
