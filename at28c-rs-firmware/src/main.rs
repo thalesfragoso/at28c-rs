@@ -130,7 +130,7 @@ const APP: () = {
         if !cx.resources.usb_dev.poll(&mut [cx.resources.serial]) {
             return;
         }
-        if cx.resources.serial.flush().is_ok() && *cx.resources.machine_state == State::Busy {
+        if cx.resources.serial.flush().is_ok() && *cx.resources.machine_state == State::Sending {
             *cx.resources.machine_state = State::Idle;
         }
         match cx.resources.serial.process() {
@@ -256,11 +256,13 @@ const APP: () = {
             }
             _ => Ok(()),
         };
-        if done.is_ok() {
-            cx.resources
-                .machine_state
-                .lock(|shared| *shared = State::Idle);
-        }
+        cx.resources.machine_state.lock(|shared| {
+            if done.is_ok() {
+                *shared = State::Idle;
+            } else {
+                *shared = State::Sending;
+            }
+        });
         cx.resources.led.toggle().ok();
     }
 

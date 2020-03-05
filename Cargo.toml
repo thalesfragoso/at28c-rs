@@ -1,34 +1,7 @@
-#cargo-features = ["profile-overrides"] # +
-
-[package]
-authors = ["thalesfragoso <thales.fragosoz@gmail.com>"]
-edition = "2018"
-readme = "README.md"
-name = "at28c-rs-firmware"
-version = "0.1.0"
-
-[dependencies]
-cortex-m = "0.6.2"
-stm32f1xx-hal = {version = "0.5.3", features = ["stm32f103", "stm32-usbd", "rt"]}
-usb-device = "0.2.5"
-usbd-serial = {version = "0.1.0", path = "../usbd-serial"}
-#panic-halt = "0.2.0"
-cortex-m-rtfm = "0.5.1"
-embedded-hal = "0.2.3"
-panic-semihosting = "0.5.3"
-cortex-m-semihosting = "0.3.5"
-
-# Uncomment for the panic example.
-# panic-itm = "0.4.0"
-
-# this lets you use `cargo fix`!
-[[bin]]
-name = "at28c-rs-firmware"
-test = false
-bench = false
-
-#[profile.dev.overrides."*"] # +
-#opt-level = "s" # +
+[workspace]
+members = [
+    "at28c-rs-firmware",
+]
 
 [profile.release]
 codegen-units = 1 # better optimizations
@@ -38,7 +11,6 @@ opt-level = "s"
 panic = "abort"
 
 [profile.dev]
-debug = true
 #lto = true
 codegen-units = 1
 opt-level = 2

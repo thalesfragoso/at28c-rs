@@ -5,6 +5,7 @@
 runner = "gdb-multiarch -tui -q -x openocd.gdb"
 # runner = "gdb -q -x openocd.gdb"
 
+[target.thumbv7m-none-eabi]
 rustflags = [
   # LLD (shipped with the Rust toolchain) is used as the default linker
   "-C", "linker=rust-lld",

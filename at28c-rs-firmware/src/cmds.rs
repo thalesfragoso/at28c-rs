@@ -42,6 +42,7 @@ pub enum State {
     Busy = 0x01,
     WaitingPage = 0x02,
     Disconnected = 0x03,
+    Sending = 0x04,
 }
 
 impl Default for State {
@@ -108,7 +109,7 @@ impl Commands {
             }
             Commands::QueryState => match *state {
                 State::Idle => Response::Idle,
-                State::Busy => Response::Busy,
+                State::Busy | State::Sending => Response::Busy,
                 State::Disconnected => Response::Disconnected,
                 State::WaitingPage => Response::SendPage,
             },

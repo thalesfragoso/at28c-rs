@@ -279,7 +279,7 @@ impl At28cIO for BlueIO {
         }
         let len = u16::try_from(buf.len()).map_err(|_| AtError::PageOverflow)?;
         // Check if the buf fits in one single page
-        if start_addr + len > start_addr | 0x003F {
+        if start_addr + len - 1 > start_addr | 0x003F {
             return Err(AtError::PageOverflow);
         }
         let mut addr = start_addr;
@@ -294,7 +294,7 @@ impl At28cIO for BlueIO {
         }
         let mut attempts = 0;
         let timeout = loop {
-            if self.read_byte(addr) == buf[(len as usize) - 1] {
+            if self.read_byte(addr - 1) == buf[(len as usize) - 1] {
                 break false;
             } else {
                 attempts += 1;
