@@ -3,6 +3,7 @@
 
 use core::{
     panic::PanicInfo,
+    ptr,
     sync::atomic::{self, Ordering},
 };
 //use panic_semihosting as _;
@@ -125,17 +126,23 @@ const APP: () = {
 
     #[task(binds = USB_LP_CAN_RX0, priority = 3, resources = [usb_dev, serial, machine_state], spawn = [process])]
     fn usb_rx0(cx: usb_rx0::Context) {
+        static mut PAGE_ADDR: u16 = 0;
         if !cx.resources.usb_dev.poll(&mut [cx.resources.serial]) {
             return;
         }
+        if cx.resources.serial.flush().is_ok() && *cx.resources.machine_state == State::Busy {
+            *cx.resources.machine_state = State::Idle;
+        }
         match cx.resources.serial.process() {
-            Ok(c) if c == 4 => {
-                let buf = cx.resources.serial.reader_buf().unwrap();
+            Ok(c) if c >= 4 => {
                 if *cx.resources.machine_state != State::WaitingPage {
+                    let buf = cx.resources.serial.reader_buf().unwrap();
                     let cmd = buf[0].into();
                     if *cx.resources.machine_state == State::Idle {
                         match cmd {
-                            Commands::ReadByte | Commands::DisableProctetion => {
+                            Commands::ReadByte
+                            | Commands::DisableProctetion
+                            | Commands::ReadPage => {
                                 cx.spawn
                                     .process(cmd, u16::from_le_bytes([buf[1], buf[2]]), None, None)
                                     .ok();
@@ -150,22 +157,28 @@ const APP: () = {
                                     )
                                     .ok();
                             }
+                            Commands::WritePage => {
+                                *PAGE_ADDR = u16::from_le_bytes([buf[1], buf[2]]);
+                            }
                             _ => {}
                         }
                     }
                     let response = Commands::process(cmd, cx.resources.machine_state);
-                    cx.resources.serial.clear_reader();
-                    if cx.resources.serial.writer_len() == 64 {
-                        cx.resources.serial.clear_writer();
-                    }
                     if response != Response::NoResponse {
                         cx.resources.serial.write(&[response.into()]).ok();
                         cx.resources.serial.flush().ok();
                     }
+                } else {
+                    let buf = cx.resources.serial.replace_reader(None).unwrap();
+                    cx.spawn
+                        .process(Commands::WritePage, *PAGE_ADDR, None, Some(buf))
+                        .ok();
+                    *cx.resources.machine_state = State::Busy;
                 }
             }
             _ => {}
         }
+        cx.resources.serial.clear_reader();
     }
 
     #[task(priority = 2, capacity = 2, resources = [serial, blue_io, machine_state, led])]
@@ -174,39 +187,76 @@ const APP: () = {
         cmd: Commands,
         addr: u16,
         byte_write: Option<u8>,
-        _buffer: Option<Box<SerialPool>>,
+        buffer: Option<Box<SerialPool>>,
     ) {
-        if cmd == Commands::ReadByte {
-            let byte = cx.resources.blue_io.read_byte(addr);
-            cx.resources.serial.lock(|shared| {
-                shared.write(&[byte]).ok();
-                shared.flush().ok();
-            });
-            cx.resources
-                .machine_state
-                .lock(|shared| *shared = State::Idle);
-        } else if cmd == Commands::WriteByte {
-            if let Some(byte) = byte_write {
-                let result = cx.resources.blue_io.write_byte(byte, addr);
-                let response = if result.is_ok() {
-                    Response::WriteDone
-                } else {
-                    Response::Error
-                };
+        let done = match cmd {
+            Commands::ReadByte => {
+                let byte = cx.resources.blue_io.read_byte(addr);
                 cx.resources.serial.lock(|shared| {
-                    shared.write(&[response.into()]).ok();
-                    shared.flush().ok();
-                });
-                cx.resources
-                    .machine_state
-                    .lock(|shared| *shared = State::Idle);
+                    shared.write(&[byte]).ok();
+                    shared.flush()
+                })
             }
-        } else if cmd == Commands::DisableProctetion {
-            cx.resources.blue_io.disable_write_protection();
-            cx.resources.serial.lock(|shared| {
-                shared.write(&[Response::WriteDone.into()]).ok();
-                shared.flush().ok();
-            });
+            Commands::WriteByte => {
+                if let Some(byte) = byte_write {
+                    let result = cx.resources.blue_io.write_byte(byte, addr);
+                    let response = if result.is_ok() {
+                        Response::WriteDone
+                    } else {
+                        Response::Error
+                    };
+                    cx.resources.serial.lock(|shared| {
+                        shared.write(&[response.into()]).ok();
+                        shared.flush()
+                    })
+                } else {
+                    Ok(())
+                }
+            }
+            Commands::DisableProctetion => {
+                cx.resources.blue_io.disable_write_protection();
+                cx.resources.serial.lock(|shared| {
+                    shared.write(&[Response::WriteDone.into()]).ok();
+                    shared.flush()
+                })
+            }
+            Commands::ReadPage => {
+                let mut node = SerialPool::alloc().unwrap().init(PoolNode::new());
+                let mut current_addr = addr;
+                unsafe {
+                    node.write_with(|buf, _len| {
+                        for elem in buf.iter_mut() {
+                            let byte = cx.resources.blue_io.read_byte(current_addr);
+                            ptr::write(elem.as_mut_ptr(), byte);
+                            current_addr += 1;
+                        }
+                        buf.len()
+                    });
+                }
+                cx.resources.serial.lock(|shared| {
+                    shared.replace_writer(Some(node));
+                    shared.flush()
+                })
+            }
+            Commands::WritePage => {
+                if let Some(buf) = buffer {
+                    let result = cx.resources.blue_io.write_page(buf.read(), addr);
+                    let response = if result.is_ok() {
+                        Response::WriteDone
+                    } else {
+                        Response::Error
+                    };
+                    cx.resources.serial.lock(|shared| {
+                        shared.write(&[response.into()]).ok();
+                        shared.flush()
+                    })
+                } else {
+                    Ok(())
+                }
+            }
+            _ => Ok(()),
+        };
+        if done.is_ok() {
             cx.resources
                 .machine_state
                 .lock(|shared| *shared = State::Idle);

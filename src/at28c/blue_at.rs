@@ -232,7 +232,6 @@ impl BlueIO {
 }
 
 impl At28cIO for BlueIO {
-    const MAX_ADDR: u16 = 0x7FFF;
     const WRITE_TIMEOUT_MS: u8 = 10;
 
     fn read_byte(&mut self, addr: u16) -> u8 {
@@ -248,14 +247,11 @@ impl At28cIO for BlueIO {
     }
 
     fn write_byte(&mut self, byte: u8, addr: u16) -> Result<(), AtError> {
-        if addr > Self::MAX_ADDR {
-            return Err(AtError::InvalidAddress);
-        }
         self.set_address(addr);
         self.write(byte);
         self.set_write_enable(true);
-        // delay for 5us
-        delay(self.cycles_us * 5);
+        // delay for 0.5us, this works because cycles_us is always >= 8 for stm32f103
+        delay(self.cycles_us / 2);
         self.set_write_enable(false);
         let mut attempts = 0;
         let timeout = loop {
@@ -280,9 +276,6 @@ impl At28cIO for BlueIO {
     fn write_page(&mut self, buf: &[u8], start_addr: u16) -> Result<(), AtError> {
         if buf.is_empty() {
             return Ok(());
-        }
-        if start_addr > Self::MAX_ADDR {
-            return Err(AtError::InvalidAddress);
         }
         let len = u16::try_from(buf.len()).map_err(|_| AtError::PageOverflow)?;
         // Check if the buf fits in one single page

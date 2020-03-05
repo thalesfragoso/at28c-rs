@@ -7,23 +7,26 @@ use core::{
 #[derive(Copy, Clone, PartialEq)]
 #[repr(u8)]
 pub enum Commands {
+    #[allow(dead_code)]
     Connect = 0x00,
+    #[allow(dead_code)]
     ReadByte = 0x01,
     WriteByte = 0x02,
     WritePage = 0x03,
+    #[allow(dead_code)]
     Disconnect = 0x04,
+    #[allow(dead_code)]
     QueryState = 0x05,
-    DisableProctetion = 0x06,
-    Invalid = 0x07,
+    ReadPage = 0x06,
+    DisableProctetion = 0x07,
+    Invalid = 0x08,
 }
 
 #[derive(Copy, Clone, PartialEq)]
 #[repr(u8)]
 pub enum Response {
     Connected = 0x00,
-    ReadDone = 0x01,
     WriteDone = 0x02,
-    PageDone = 0x03,
     Idle = 0x04,
     Busy = 0x05,
     Disconnected = 0x06,
@@ -56,7 +59,7 @@ impl Into<u8> for Response {
 
 impl From<u8> for Commands {
     fn from(cmd: u8) -> Self {
-        if cmd <= 0x06 {
+        if cmd <= 0x07 {
             // NOTE(unsafe), Commands is repr(u8)
             unsafe { mem::transmute(cmd) }
         } else {
@@ -76,7 +79,10 @@ impl Commands {
                     Response::Connected
                 }
             }
-            Commands::ReadByte | Commands::WriteByte | Commands::DisableProctetion => {
+            Commands::ReadByte
+            | Commands::WriteByte
+            | Commands::DisableProctetion
+            | Commands::ReadPage => {
                 if *state != State::Idle {
                     Response::NotValid
                 } else {
