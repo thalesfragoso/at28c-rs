@@ -1,0 +1,40 @@
+[config]
+default_to_workspace = false
+
+[tasks.firmware]
+command = "cargo"
+args = ["build", "-p=at28c-rs-firmware", "--release", "--target=thumbv7m-none-eabi"]
+
+[tasks.size]
+script = [
+    "cd at28c-rs-firmware",
+    "cargo size --bin=at28c-rs-firmware --release --target=thumbv7m-none-eabi",
+]
+dependencies = ["firmware"]
+
+[tasks.sizea]
+script = [
+    "cd at28c-rs-firmware",
+    "cargo size --bin=at28c-rs-firmware --release --target=thumbv7m-none-eabi -- -A",
+]
+dependencies = ["firmware"]
+
+[tasks.cli]
+command = "cargo"
+args = ["build", "-p=at28c-rs-cli", "--release"]
+
+[tasks.cli-debug]
+command = "cargo"
+args = ["build", "-p=at28c-rs-cli"]
+
+[tasks.all]
+dependencies = [
+    "firmware",
+    "cli",
+    "size"
+]
+
+[tasks.gdb]
+command = "cargo"
+args = ["run", "-p=at28c-rs-firmware", "--release", "--target=thumbv7m-none-eabi"]
+dependencies = ["firmware"]

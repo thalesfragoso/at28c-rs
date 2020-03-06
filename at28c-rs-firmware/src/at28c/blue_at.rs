@@ -42,7 +42,8 @@ impl BlueIO {
             bb::set(&(*RCC::ptr()).apb2rstr, 3);
             bb::clear(&(*RCC::ptr()).apb2rstr, 3);
         }
-        // NOTE(unsafe) Only access BlueIO exclusive registers
+        // NOTE(unsafe) PORTA registers will only be accessed from this struct for now on
+        // The others PORTA pins used in this firmware are not affected by the ODR register
         let porta = unsafe { &(*pac::GPIOA::ptr()) };
         porta.crl.write(|w| {
             w.mode0()
@@ -194,7 +195,7 @@ impl BlueIO {
         let addr_low = u32::from(addr & 0x07FF);
         let addr_high = u32::from((addr >> 11) & 0x000F);
 
-        // NOTE(unsafe) Only access BlueIO exclusive registers
+        // NOTE(unsafe) The others PORTA pins used in this firmware are not affected by the ODR register
         let porta = unsafe { &(*pac::GPIOA::ptr()) };
         porta.odr.modify(|r, w| {
             let current = r.bits();

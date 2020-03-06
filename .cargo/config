@@ -1,9 +1,9 @@
 [target.'cfg(all(target_arch = "arm", target_os = "none"))']
 # uncomment ONE of these three option to make `cargo run` start a GDB session
 # which option to pick depends on your system
-#runner = "arm-none-eabi-gdb -q -x openocd.gdb"
-runner = "gdb-multiarch -tui -q -x openocd.gdb"
-# runner = "gdb -q -x openocd.gdb"
+#runner = "arm-none-eabi-gdb -q -x ./at28c-rs-firmware/openocd.gdb"
+runner = "gdb-multiarch -tui -q -x ./at28c-rs-firmware/openocd.gdb"
+# runner = "gdb -q -x ./at28c-rs-firmware/openocd.gdb"
 
 [target.thumbv7m-none-eabi]
 rustflags = [
@@ -18,4 +18,4 @@ rustflags = [
 ]
 
 [build]
-target = "thumbv7m-none-eabi"    # Cortex-M3
+#target = "thumbv7m-none-eabi"    # Cortex-M3

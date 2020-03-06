@@ -11,7 +11,7 @@ version = "0.1.0"
 cortex-m = "0.6.2"
 stm32f1xx-hal = {version = "0.5.3", features = ["stm32f103", "stm32-usbd", "rt"]}
 usb-device = "0.2.5"
-usbd-serial = {version = "0.1.0", path = "../../usbd-serial"}
+usbd-serial = {git = "https://github.com/thalesfragoso/usbd-serial", branch = "writer-impl"}
 #panic-halt = "0.2.0"
 cortex-m-rtfm = "0.5.1"
 embedded-hal = "0.2.3"

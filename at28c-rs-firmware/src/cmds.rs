@@ -26,14 +26,14 @@ pub enum Commands {
 #[repr(u8)]
 pub enum Response {
     Connected = 0x00,
-    WriteDone = 0x02,
-    Idle = 0x04,
-    Busy = 0x05,
-    Disconnected = 0x06,
-    NotValid = 0x07,
-    NoResponse = 0x08,
-    SendPage = 0x09,
-    Error = 0x10,
+    WriteDone = 0x01,
+    Idle = 0x02,
+    Busy = 0x03,
+    Disconnected = 0x04,
+    NotValid = 0x05,
+    NoResponse = 0x06,
+    SendPage = 0x07,
+    Error = 0x08,
 }
 
 #[derive(Copy, Clone, PartialEq)]

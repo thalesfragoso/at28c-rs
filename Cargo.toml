@@ -1,6 +1,7 @@
 [workspace]
 members = [
     "at28c-rs-firmware",
+    "at28c-rs-cli",
 ]
 
 [profile.release]

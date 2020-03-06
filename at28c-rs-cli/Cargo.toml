@@ -1,0 +1,13 @@
+[package]
+name = "at28c-rs-cli"
+version = "0.1.0"
+authors = ["thalesfragoso <thales.fragosoz@gmail.com>"]
+edition = "2018"
+
+# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+
+[dependencies]
+serial = "0.4.0"
+structopt = "0.3.11"
+colored = "1.9.3"
+thiserror = "1.0.11"
