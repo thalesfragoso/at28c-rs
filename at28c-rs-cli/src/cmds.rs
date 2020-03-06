@@ -5,6 +5,7 @@ pub enum Commands {
     Connect = 0x00,
     #[allow(dead_code)]
     ReadByte = 0x01,
+    #[allow(dead_code)]
     WriteByte = 0x02,
     WritePage = 0x03,
     #[allow(dead_code)]
@@ -12,8 +13,12 @@ pub enum Commands {
     #[allow(dead_code)]
     QueryState = 0x05,
     ReadPage = 0x06,
-    DisableProctetion = 0x07,
-    Invalid = 0x08,
+    #[allow(dead_code)]
+    DisableProctetion256 = 0x07,
+    #[allow(dead_code)]
+    DisableProctetion64 = 0x08,
+    #[allow(dead_code)]
+    Invalid = 0x09,
 }
 
 #[derive(Copy, Clone, PartialEq)]
@@ -21,12 +26,19 @@ pub enum Commands {
 pub enum Response {
     Connected = 0x00,
     WriteDone = 0x01,
+    #[allow(dead_code)]
     Idle = 0x02,
+    #[allow(dead_code)]
     Busy = 0x03,
+    #[allow(dead_code)]
     Disconnected = 0x04,
+    #[allow(dead_code)]
     NotValid = 0x05,
+    #[allow(dead_code)]
     NoResponse = 0x06,
+    #[allow(dead_code)]
     SendPage = 0x07,
+    #[allow(dead_code)]
     Error = 0x08,
     Invalid = 0x09,
 }

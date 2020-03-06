@@ -1,17 +1,22 @@
 use colored::*;
+use indicatif::{ProgressBar, ProgressStyle};
 use serial::{core::Error as SerialError, prelude::*};
 use std::{
     ffi::OsStr,
+    fs::OpenOptions,
     io::{self, prelude::*},
     path::PathBuf,
     process,
-    time::Duration,
+    time::{Duration, Instant},
 };
 use structopt::StructOpt;
 use thiserror::Error;
 
 mod cmds;
 use cmds::{Commands, Response};
+
+const COMMAND_SIZE: usize = 4;
+const PAGE_SIZE: u16 = 64;
 
 #[derive(Debug, Error)]
 enum CliError {
@@ -25,9 +30,17 @@ enum CliError {
     SerialError(#[from] SerialError),
     #[error("Unexpected Response")]
     DeviceError,
+    #[error("File too big")]
+    FileTooBig,
+    #[error("For now only .bin files are supported")]
+    WrongFileType,
+    #[error("Verification pass fail")]
+    VerificationError,
+    #[error("Invalid Device")]
+    InvalidDevice,
 }
 
-#[derive(Copy, Clone, Debug)]
+#[derive(Copy, Clone, Debug, PartialEq)]
 enum Device {
     AT28C256,
     AT28C64,
@@ -35,7 +48,7 @@ enum Device {
 }
 
 impl Device {
-    pub fn rom_size(&self) -> u32 {
+    pub fn rom_size(self) -> u16 {
         match self {
             Device::AT28C256 => 32768,
             Device::AT28C64 => 8192,
@@ -70,6 +83,10 @@ struct Opt {
     #[structopt(short, long)]
     read: bool,
 
+    /// Unlock the device for writing
+    #[structopt(short, long)]
+    unlock: bool,
+
     /// Serial port where the device is attached
     #[structopt(short, long, parse(from_os_str))]
     port: PathBuf,
@@ -85,7 +102,7 @@ struct Opt {
 
 fn main() {
     match try_main() {
-        Ok(_) => (),
+        Ok(_) => println!("{}", "Done".green().bold()),
         Err(e) => {
             eprintln!("{} : {}", "error".red().bold(), e);
             process::exit(1);
@@ -101,30 +118,39 @@ fn try_main() -> Result<(), CliError> {
         return Err(CliError::NoReadOrWrite);
     }
 
+    if opt.device == Device::Invalid {
+        return Err(CliError::InvalidDevice);
+    }
+
+    let rom_size = opt.device.rom_size();
     let mut port = serial::open(&opt.port)?;
     port.set_timeout(Duration::from_secs(1))?;
     init(&mut port)?;
 
-    Ok(())
+    if opt.unlock {
+        unlock(&mut port, opt.device)?;
+        println!("{}", "Device unlocked".yellow());
+        return Ok(());
+    }
+
+    if opt.write {
+        write_from_file(&mut port, opt.file, rom_size)
+    } else {
+        read_to_file(&mut port, opt.file, rom_size)
+    }
 }
 
-fn init<T: SerialPort>(port: &mut T) -> Result<(), CliError> {
-    let mut buf: [u8; 4] = [Commands::QueryState.into(), 0x00, 0x00, 0x00];
-    let count = port.write(&buf)?;
-    if count != 4 {
+fn init(port: &mut impl SerialPort) -> Result<(), CliError> {
+    let mut command: [u8; COMMAND_SIZE] = [Commands::QueryState.into(), 0x00, 0x00, 0x00];
+    if port.write(&command)? != COMMAND_SIZE {
         return Err(CliError::DeviceError);
     }
     port.flush()?;
-    let _ = port.read(&mut buf[..1])?;
-    match Response::from(buf[0]) {
+    let _ = port.read(&mut command[..1])?;
+    match Response::from(command[0]) {
         Response::Disconnected => {
-            buf[0] = Commands::Connect.into();
-            let count = port.write(&buf)?;
-            if count != 4 {
-                return Err(CliError::DeviceError);
-            }
-            port.flush()?;
-            let _ = port.read(&mut buf[..1])?;
+            command[0] = Commands::Connect.into();
+            write_cmd_check_response(port, command, Response::Connected)?;
         }
         Response::Idle => {}
         _ => {
@@ -132,4 +158,163 @@ fn init<T: SerialPort>(port: &mut T) -> Result<(), CliError> {
         }
     }
     Ok(())
+}
+
+fn write_from_file(
+    port: &mut impl SerialPort,
+    path: PathBuf,
+    max_size: u16,
+) -> Result<(), CliError> {
+    if path.extension().ok_or(CliError::WrongFileType)? != "bin" {
+        return Err(CliError::WrongFileType);
+    }
+    let mut bytes = Vec::with_capacity(max_size as usize);
+    let mut file = OpenOptions::new().read(true).open(path)?;
+    if file.read_to_end(&mut bytes)? > max_size as usize {
+        return Err(CliError::FileTooBig);
+    }
+    let mut addr = 0;
+    let pb_write = ProgressBar::new(bytes.len() as u64);
+    pb_write.set_message("Wrinting");
+    pb_write.set_style(
+        ProgressStyle::default_bar()
+            .template("{msg:.green.bold} [{bar:40.cyan/blue}] {bytes}/{total_bytes}")
+            .progress_chars("#>-"),
+    );
+    let write_time = Instant::now();
+    for page in bytes.chunks(PAGE_SIZE as usize) {
+        write_page(port, &page, addr)?;
+        addr += PAGE_SIZE;
+        pb_write.set_position(u64::from(addr));
+    }
+    let elapsed = write_time.elapsed();
+    pb_write.finish();
+    println!(
+        "Writing took {}.{}s",
+        elapsed.as_secs(),
+        elapsed.as_millis()
+    );
+
+    addr = 0;
+    let pb_read = ProgressBar::new(bytes.len() as u64);
+    pb_read.set_message("Verifying");
+    pb_read.set_style(
+        ProgressStyle::default_bar()
+            .template("{msg:.green.bold} [{bar:40.cyan/blue}] {bytes}/{total_bytes}")
+            .progress_chars("#>-"),
+    );
+    let veri_time = Instant::now();
+    for page in bytes.chunks(PAGE_SIZE as usize) {
+        let mut buf = [0u8; PAGE_SIZE as usize];
+        // NOTE(unsafe) buf has PAGE_SIZE length
+        unsafe { read_page(port, &mut buf, addr)? };
+        if &buf[..page.len()] != page {
+            return Err(CliError::VerificationError);
+        }
+        addr += PAGE_SIZE;
+        pb_read.set_position(u64::from(addr));
+    }
+    let elapsed = veri_time.elapsed();
+    pb_read.finish();
+    println!("{}", "Verification OK".green());
+    println!(
+        "Verifying took {}.{}s",
+        elapsed.as_secs(),
+        elapsed.as_millis()
+    );
+    Ok(())
+}
+
+fn read_to_file(port: &mut impl SerialPort, path: PathBuf, max_size: u16) -> Result<(), CliError> {
+    let mut file = OpenOptions::new().write(true).create_new(true).open(path)?;
+    let mut addr = 0;
+
+    let pb_read = ProgressBar::new(u64::from(max_size));
+    pb_read.set_message("Reading");
+    pb_read.set_style(
+        ProgressStyle::default_bar()
+            .template("{msg:.green.blod} [{bar:40.cyan/blue}] {bytes}/{total_bytes}")
+            .progress_chars("#>-"),
+    );
+    let read_time = Instant::now();
+    loop {
+        let mut buf = [0u8; PAGE_SIZE as usize];
+        // NOTE(unsafe) buf has PAGE_SIZE length
+        unsafe { read_page(port, &mut buf, addr)? };
+        file.write_all(&buf)?;
+        addr += PAGE_SIZE;
+        pb_read.set_position(u64::from(addr));
+        if addr >= max_size {
+            break;
+        }
+    }
+    let elapsed = read_time.elapsed();
+    pb_read.finish();
+    println!(
+        "Reading took {}.{}s",
+        elapsed.as_secs(),
+        elapsed.as_millis()
+    );
+    file.flush()?;
+    Ok(())
+}
+
+fn write_page(port: &mut impl SerialPort, buf: &[u8], addr: u16) -> Result<(), CliError> {
+    let mut command: [u8; COMMAND_SIZE] = [Commands::WritePage.into(), 0x00, 0x00, 0x00];
+    command[1..3].copy_from_slice(&addr.to_le_bytes()[..]);
+    write_cmd_check_response(port, command, Response::SendPage)?;
+    if port.write(&buf)? != buf.len() {
+        return Err(CliError::DeviceError);
+    }
+    port.flush()?;
+    check_response(port, Response::WriteDone)?;
+    Ok(())
+}
+
+/// # Safety
+/// `buf` length must be equal to `PAGE_SIZE`
+unsafe fn read_page(port: &mut impl SerialPort, buf: &mut [u8], addr: u16) -> Result<(), CliError> {
+    let mut command: [u8; COMMAND_SIZE] = [Commands::ReadPage.into(), 0x00, 0x00, 0x00];
+    command[1..3].copy_from_slice(&addr.to_le_bytes()[..]);
+    if port.write(&command)? != COMMAND_SIZE {
+        return Err(CliError::DeviceError);
+    }
+    port.flush()?;
+
+    if port.read(buf)? != PAGE_SIZE as usize {
+        Err(CliError::DeviceError)
+    } else {
+        Ok(())
+    }
+}
+
+fn unlock(port: &mut impl SerialPort, device: Device) -> Result<(), CliError> {
+    let command: [u8; COMMAND_SIZE] = match device {
+        Device::AT28C256 => [Commands::DisableProctetion256.into(), 0x00, 0x00, 0x00],
+        Device::AT28C64 => [Commands::DisableProctetion64.into(), 0x00, 0x00, 0x00],
+        Device::Invalid => return Err(CliError::InvalidDevice),
+    };
+    write_cmd_check_response(port, command, Response::WriteDone)
+}
+
+fn write_cmd_check_response(
+    port: &mut impl SerialPort,
+    cmd: [u8; 4],
+    expected: Response,
+) -> Result<(), CliError> {
+    if port.write(&cmd)? != COMMAND_SIZE {
+        return Err(CliError::DeviceError);
+    }
+    port.flush()?;
+    check_response(port, expected)
+}
+
+fn check_response(port: &mut impl SerialPort, expected: Response) -> Result<(), CliError> {
+    let mut buf = [0];
+    let _ = port.read(&mut buf)?;
+    if Response::from(buf[0]) != expected {
+        Err(CliError::DeviceError)
+    } else {
+        Ok(())
+    }
 }

@@ -6,10 +6,8 @@ use core::{
     ptr,
     sync::atomic::{self, Ordering},
 };
-//use panic_semihosting as _;
 
 use cortex_m::asm;
-//use cortex_m_semihosting::hprintln;
 use embedded_hal::digital::v2::OutputPin;
 use rtfm::app;
 use stm32f1xx_hal::{
@@ -141,7 +139,8 @@ const APP: () = {
                     if *cx.resources.machine_state == State::Idle {
                         match cmd {
                             Commands::ReadByte
-                            | Commands::DisableProctetion
+                            | Commands::DisableProctetion256
+                            | Commands::DisableProctetion64
                             | Commands::ReadPage => {
                                 cx.spawn
                                     .process(cmd, u16::from_le_bytes([buf[1], buf[2]]), None, None)
@@ -213,8 +212,15 @@ const APP: () = {
                     Ok(())
                 }
             }
-            Commands::DisableProctetion => {
-                cx.resources.blue_io.disable_write_protection();
+            Commands::DisableProctetion256 => {
+                cx.resources.blue_io.disable_write_protection256();
+                cx.resources.serial.lock(|shared| {
+                    shared.write(&[Response::WriteDone.into()]).ok();
+                    shared.flush()
+                })
+            }
+            Commands::DisableProctetion64 => {
+                cx.resources.blue_io.disable_write_protection64();
                 cx.resources.serial.lock(|shared| {
                     shared.write(&[Response::WriteDone.into()]).ok();
                     shared.flush()

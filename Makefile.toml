@@ -37,4 +37,3 @@ dependencies = [
 [tasks.gdb]
 command = "cargo"
 args = ["run", "-p=at28c-rs-firmware", "--release", "--target=thumbv7m-none-eabi"]
-dependencies = ["firmware"]

@@ -12,5 +12,6 @@ pub trait At28cIO {
     fn read_byte(&mut self, addr: u16) -> u8;
     fn write_byte(&mut self, byte: u8, addr: u16) -> Result<(), AtError>;
     fn write_page(&mut self, buf: &[u8], start_addr: u16) -> Result<(), AtError>;
-    fn disable_write_protection(&mut self);
+    fn disable_write_protection256(&mut self);
+    fn disable_write_protection64(&mut self);
 }

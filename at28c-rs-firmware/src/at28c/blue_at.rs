@@ -313,9 +313,22 @@ impl At28cIO for BlueIO {
         }
     }
 
-    fn disable_write_protection(&mut self) {
+    fn disable_write_protection256(&mut self) {
         let data = &[0xAA, 0x55, 0x80, 0xAA, 0x55, 0x20];
         let addresses = &[0x5555, 0x2AAA, 0x5555, 0x5555, 0x2AAA, 0x5555];
+        for (byte, addr) in data.iter().zip(addresses.iter()) {
+            self.set_address(*addr);
+            self.write(*byte);
+            self.set_write_enable(true);
+            // delay for 5us
+            delay(self.cycles_us * 5);
+            self.set_write_enable(false);
+        }
+    }
+
+    fn disable_write_protection64(&mut self) {
+        let data = &[0xAA, 0x55, 0x80, 0xAA, 0x55, 0x20];
+        let addresses = &[0x1555, 0x0AAA, 0x1555, 0x1555, 0x0AAA, 0x1555];
         for (byte, addr) in data.iter().zip(addresses.iter()) {
             self.set_address(*addr);
             self.write(*byte);

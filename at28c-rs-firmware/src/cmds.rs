@@ -18,8 +18,9 @@ pub enum Commands {
     #[allow(dead_code)]
     QueryState = 0x05,
     ReadPage = 0x06,
-    DisableProctetion = 0x07,
-    Invalid = 0x08,
+    DisableProctetion256 = 0x07,
+    DisableProctetion64 = 0x08,
+    Invalid = 0x09,
 }
 
 #[derive(Copy, Clone, PartialEq)]
@@ -60,7 +61,7 @@ impl Into<u8> for Response {
 
 impl From<u8> for Commands {
     fn from(cmd: u8) -> Self {
-        if cmd <= 0x07 {
+        if cmd <= 0x08 {
             // NOTE(unsafe), Commands is repr(u8)
             unsafe { mem::transmute(cmd) }
         } else {
@@ -82,7 +83,8 @@ impl Commands {
             }
             Commands::ReadByte
             | Commands::WriteByte
-            | Commands::DisableProctetion
+            | Commands::DisableProctetion256
+            | Commands::DisableProctetion64
             | Commands::ReadPage => {
                 if *state != State::Idle {
                     Response::NotValid
