@@ -1,6 +1,9 @@
 use colored::*;
 use indicatif::{ProgressBar, ProgressStyle};
-use serial::{core::Error as SerialError, prelude::*};
+use serial::{
+    core::{Error as SerialError, FlowControl},
+    prelude::*,
+};
 use std::{
     ffi::OsStr,
     fs::OpenOptions,
@@ -125,6 +128,10 @@ fn try_main() -> Result<(), CliError> {
     let rom_size = opt.device.rom_size();
     let mut port = serial::open(&opt.port)?;
     port.set_timeout(Duration::from_secs(1))?;
+    port.reconfigure(&|settings| {
+        settings.set_flow_control(FlowControl::FlowNone);
+        Ok(())
+    })?;
     init(&mut port)?;
 
     if opt.unlock {
@@ -281,11 +288,8 @@ unsafe fn read_page(port: &mut impl SerialPort, buf: &mut [u8], addr: u16) -> Re
     }
     port.flush()?;
 
-    if port.read(buf)? != PAGE_SIZE as usize {
-        Err(CliError::DeviceError)
-    } else {
-        Ok(())
-    }
+    port.read_exact(buf)?;
+    Ok(())
 }
 
 fn unlock(port: &mut impl SerialPort, device: Device) -> Result<(), CliError> {

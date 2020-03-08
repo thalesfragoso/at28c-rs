@@ -118,7 +118,8 @@ const APP: () = {
     #[idle]
     fn idle(_cx: idle::Context) -> ! {
         loop {
-            asm::wfi();
+            // This could be a asm::wfi() but I used a nop() to avoid problems when connecting a debug probe
+            asm::nop();
         }
     }
 

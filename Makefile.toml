@@ -31,9 +31,21 @@ args = ["build", "-p=at28c-rs-cli"]
 dependencies = [
     "firmware",
     "cli",
-    "size"
 ]
 
 [tasks.gdb]
 command = "cargo"
 args = ["run", "-p=at28c-rs-firmware", "--release", "--target=thumbv7m-none-eabi"]
+
+[tasks.flash]
+script = [
+    "cd at28c-rs-firmware",
+    "cargo flash --release --target=thumbv7m-none-eabi --chip stm32f103c8",
+]
+dependencies = ["firmware"]
+
+#[tasks.flash]
+#script = [
+#    "openocd -f interface/stlink-v2.cfg -f target/stm32f1x.cfg -c \"program target/thumbv7m-none-eabi/release/at28c-rs-firmware verify reset exit\""
+#]
+#dependencies = ["firmware"]
